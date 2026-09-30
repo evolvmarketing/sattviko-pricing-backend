@@ -1,5 +1,5 @@
 const express = require('express');
-const axios = require('axios');
+const puppeteer = require('puppeteer');
 const cheerio = require('cheerio');
 const cors = require('cors');
 require('dotenv').config();
@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// City mapping for filtering
+// City mapping
 const cityMapping = {
   'gurgaon': 'Gurgaon',
   'mumbai': 'Mumbai',
@@ -20,142 +20,153 @@ const cityMapping = {
   'bangalore': 'Bengaluru'
 };
 
-/**
- * Sample product data for Sattviko across platforms
- * Real-world pricing data based on quick commerce platforms
- */
-const SAMPLE_PRODUCTS = {
-  'sattviko': [
-    {
-      name: 'Sattviko Makhana (200g)',
-      platforms: {
-        'Blinkit': { price: 349, available: true },
-        'Zepto': { price: 359, available: true },
-        'Instamart': { price: 355, available: true },
-        'BigBasket': { price: 345, available: true },
-        'Minutes': { price: 365, available: true },
-        'Amazon Now': { price: 359, available: true }
-      }
-    },
-    {
-      name: 'Sattviko Chia Seeds (200g)',
-      platforms: {
-        'Blinkit': { price: 299, available: true },
-        'Zepto': { price: 309, available: true },
-        'Instamart': { price: 305, available: true },
-        'BigBasket': { price: 295, available: true },
-        'Minutes': { price: 315, available: true },
-        'Amazon Now': { price: 299, available: false }
-      }
-    },
-    {
-      name: 'Sattviko Almonds (250g)',
-      platforms: {
-        'Blinkit': { price: 599, available: true },
-        'Zepto': { price: 619, available: true },
-        'Instamart': { price: 609, available: true },
-        'BigBasket': { price: 589, available: true },
-        'Minutes': { price: 629, available: true },
-        'Amazon Now': { price: 599, available: true }
-      }
-    },
-    {
-      name: 'Sattviko Walnuts (200g)',
-      platforms: {
-        'Blinkit': { price: 449, available: true },
-        'Zepto': { price: 459, available: true },
-        'Instamart': { price: 455, available: true },
-        'BigBasket': { price: 445, available: true },
-        'Minutes': { price: 469, available: true },
-        'Amazon Now': { price: 449, available: true }
-      }
-    },
-    {
-      name: 'Sattviko Dates (400g)',
-      platforms: {
-        'Blinkit': { price: 379, available: true },
-        'Zepto': { price: 389, available: true },
-        'Instamart': { price: 385, available: true },
-        'BigBasket': { price: 375, available: true },
-        'Minutes': { price: 395, available: true },
-        'Amazon Now': { price: 389, available: false }
-      }
-    },
-    {
-      name: 'Sattviko Raisins (250g)',
-      platforms: {
-        'Blinkit': { price: 249, available: true },
-        'Zepto': { price: 259, available: true },
-        'Instamart': { price: 255, available: true },
-        'BigBasket': { price: 245, available: true },
-        'Minutes': { price: 265, available: true },
-        'Amazon Now': { price: 249, available: true }
-      }
-    }
-  ]
-};
+// Global browser instance
+let browser = null;
 
 /**
- * Fetch product data (currently using sample data)
- * In production, this would scrape QuickCompare or call their API
+ * Initialize Puppeteer browser
+ */
+async function initBrowser() {
+  if (!browser) {
+    try {
+      browser = await puppeteer.launch({
+        headless: 'new',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process'
+        ]
+      });
+      console.log('✅ Puppeteer browser initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize Puppeteer:', error.message);
+      throw error;
+    }
+  }
+  return browser;
+}
+
+/**
+ * Fetch LIVE data from QuickCompare
+ * NO SAMPLE DATA - ONLY LIVE DATA FROM QUICKCOMPARE
  */
 async function fetchQuickCompareData(searchQuery) {
+  let page = null;
   try {
-    console.log(`Processing search: "${searchQuery}"`);
+    const browserInstance = await initBrowser();
+    page = await browserInstance.newPage();
 
-    // Return sample data for demo
-    const products = SAMPLE_PRODUCTS[searchQuery.toLowerCase()] || SAMPLE_PRODUCTS['sattviko'];
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
-    console.log(`Returning ${products.length} products for "${searchQuery}"`);
+    const url = `https://quickcompare.in/search-results?q=${encodeURIComponent(searchQuery)}`;
+    console.log(`🔍 Fetching LIVE data from: ${url}`);
+
+    await page.goto(url, {
+      waitUntil: 'networkidle2',
+      timeout: 30000
+    });
+
+    await page.waitForSelector('[class*="product"]', { timeout: 10000 }).catch(() => {
+      console.log('⚠️  Waiting for products to load...');
+    });
+
+    // Extract LIVE data
+    const products = await page.evaluate(() => {
+      const productList = [];
+      const productElements = document.querySelectorAll('[class*="product"], [data-testid*="product"], .item, [class*="card"]');
+
+      productElements.forEach((el) => {
+        try {
+          const nameEl = el.querySelector('[class*="name"], [class*="title"], h2, h3, .productName');
+          const name = nameEl ? nameEl.textContent.trim() : null;
+
+          if (!name || name.length < 3) return;
+
+          const productData = {
+            name: name,
+            platforms: {}
+          };
+
+          const priceElements = el.querySelectorAll('[class*="price"], [data-price], .amount, .cost');
+
+          if (priceElements.length > 0) {
+            priceElements.forEach((priceEl) => {
+              try {
+                const priceText = priceEl.textContent;
+                const price = parseFloat(priceText.replace(/[^0-9.]/g, ''));
+
+                const platformEl = priceEl.closest('[class*="platform"]') ||
+                                 priceEl.parentElement?.querySelector('[class*="platform"]') ||
+                                 priceEl.previousElementSibling;
+                const platform = platformEl ? platformEl.textContent.trim() : 'Platform';
+
+                if (!isNaN(price) && price > 0) {
+                  productData.platforms[platform] = {
+                    price: price,
+                    available: true
+                  };
+                }
+              } catch (e) {}
+            });
+          }
+
+          if (Object.keys(productData.platforms).length > 0) {
+            productList.push(productData);
+          }
+        } catch (err) {}
+      });
+
+      return productList;
+    });
+
+    console.log(`✅ Found ${products.length} LIVE products from QuickCompare`);
     return products;
+
   } catch (error) {
-    console.error('Error fetching products:', error.message);
-    throw error;
+    console.error(`❌ Error fetching from QuickCompare: ${error.message}`);
+    throw error; // THROW ERROR - NO FALLBACK DATA
+  } finally {
+    if (page) {
+      await page.close().catch(() => {});
+    }
   }
 }
 
 /**
- * API Endpoint: Get products by search query and optional city
+ * API: Get products
  * GET /api/products?search=sattviko&city=gurgaon
  */
 app.get('/api/products', async (req, res) => {
   try {
     const { search = 'sattviko', city } = req.query;
+    console.log(`\n📊 API Request: search="${search}", city="${city}"`);
 
-    console.log(`API Request: search="${search}", city="${city}"`);
-
-    // Fetch data from QuickCompare
     const products = await fetchQuickCompareData(search);
-
-    // Filter by city if provided
-    let filteredProducts = products;
-    if (city && cityMapping[city.toLowerCase()]) {
-      const cityName = cityMapping[city.toLowerCase()];
-      // Filter logic based on city (could be enhanced based on data structure)
-      console.log(`Filtering for city: ${cityName}`);
-    }
 
     res.json({
       success: true,
       city: city || 'all',
-      productCount: filteredProducts.length,
-      data: filteredProducts,
-      timestamp: new Date().toISOString()
+      productCount: products.length,
+      data: products,
+      timestamp: new Date().toISOString(),
+      dataSource: 'QuickCompare LIVE (Puppeteer)'
     });
 
   } catch (error) {
-    console.error('API Error:', error.message);
+    console.error('❌ API Error:', error.message);
     res.status(500).json({
       success: false,
       error: error.message,
-      message: 'Failed to fetch data from QuickCompare. Make sure the search query is correct.'
+      message: 'Failed to fetch LIVE data from QuickCompare'
     });
   }
 });
 
 /**
- * API Endpoint: Get available cities
- * GET /api/cities
+ * API: Get cities
  */
 app.get('/api/cities', (req, res) => {
   res.json({
@@ -164,35 +175,42 @@ app.get('/api/cities', (req, res) => {
 });
 
 /**
- * Health check endpoint
- * GET /api/health
+ * Health check
  */
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'OK',
-    server: 'Sattviko Pricing Backend',
+    server: 'Sattviko Pricing Backend - LIVE DATA ONLY',
     timestamp: new Date().toISOString()
   });
 });
 
 /**
- * Serve static dashboard (optional)
+ * Root endpoint
  */
 app.get('/', (req, res) => {
   res.json({
-    message: 'Sattviko Pricing Backend API',
+    message: 'Sattviko Pricing Backend',
     endpoints: [
-      'GET /api/health - Health check',
-      'GET /api/products?search=sattviko&city=gurgaon - Fetch products',
-      'GET /api/cities - Get available cities'
+      'GET /api/health',
+      'GET /api/products?search=sattviko&city=gurgaon',
+      'GET /api/cities'
     ],
-    note: 'Connect to http://localhost:5000 from your dashboard'
+    dataSource: 'QuickCompare LIVE (No Sample Data)'
   });
 });
 
-// Start server
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  if (browser) {
+    await browser.close();
+  }
+  process.exit(0);
+});
+
+// Start
 app.listen(PORT, () => {
-  console.log(`🚀 Sattviko Pricing Backend running on http://localhost:${PORT}`);
-  console.log(`📊 API Health: http://localhost:${PORT}/api/health`);
-  console.log(`🔍 Example: http://localhost:${PORT}/api/products?search=sattviko&city=gurgaon`);
+  console.log(`\n🚀 Sattviko Backend - LIVE DATA ONLY`);
+  console.log(`📡 Port: ${PORT}`);
+  console.log(`📊 Source: QuickCompare LIVE Scraping\n`);
 });
