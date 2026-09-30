@@ -1,6 +1,5 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
-const chromium = require('@sparticuz/chromium');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -21,13 +20,9 @@ let browser = null;
 
 async function initBrowser() {
   if (!browser) {
-    const executablePath = await chromium.executablePath();
-
     browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: executablePath,
-      headless: chromium.headless,
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
   }
   return browser;
