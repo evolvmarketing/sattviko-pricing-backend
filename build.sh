@@ -2,7 +2,7 @@
 set -e
 
 echo "🔨 Installing dependencies..."
-npm ci
+npm install
 
 echo "📥 Installing Chrome browser for Puppeteer..."
 npx puppeteer browsers install chrome
