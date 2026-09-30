@@ -3,10 +3,8 @@ services:
     name: sattviko-pricing-backend
     env: node
     plan: free
-    buildCommand: npm ci && npx puppeteer browsers install chrome
+    buildCommand: bash build.sh
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PUPPETEER_EXECUTABLE_PATH
-        value: /opt/render/.cache/puppeteer/chrome/linux-121.0.6167.85/chrome-linux64/chrome
