@@ -1,3 +1,6 @@
+// Keep Chrome inside the project folder so Render carries it from build to runtime.
+// Must be set BEFORE puppeteer is required.
+process.env.PUPPETEER_CACHE_DIR = process.env.PUPPETEER_CACHE_DIR || require('path').join(__dirname, '.cache', 'puppeteer');
 const express = require('express');
 const puppeteer = require('puppeteer');
 const cors = require('cors');

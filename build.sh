@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
-echo "🔨 Installing dependencies..."
+export PUPPETEER_CACHE_DIR="$(pwd)/.cache/puppeteer"
+echo "🔨 Installing dependencies (Node $(node -v))..."
 npm install --omit=dev
-echo "📥 Installing Chrome into ./.cache/puppeteer ..."
+echo "📥 Installing Chrome into $PUPPETEER_CACHE_DIR ..."
 npx puppeteer browsers install chrome
-ls -la .cache/puppeteer || true
+ls "$PUPPETEER_CACHE_DIR"
 echo "✅ Build complete"
