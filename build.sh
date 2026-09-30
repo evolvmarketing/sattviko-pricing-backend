@@ -2,9 +2,6 @@
 set -e
 
 echo "🔨 Installing dependencies..."
-npm install
+npm install --omit=dev
 
-echo "📥 Installing Chrome browser for Puppeteer..."
-npx puppeteer browsers install chrome
-
-echo "✅ Build complete - Chrome installed successfully"
+echo "✅ Build complete - Chromium bundled with @sparticuz/chromium"
