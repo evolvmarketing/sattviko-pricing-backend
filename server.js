@@ -9,13 +9,76 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 app.use(cors());
 
-// QuickCompare picks the delivery city from localStorage.geolocation
-const CITIES = {
-  gurgaon:   { latitude: 28.4595, longitude: 77.0266, name: 'Gurugram',  city: 'Gurugram',  formatted_address: 'Gurugram, Haryana, India',   pincode: '122001' },
-  mumbai:    { latitude: 19.0760, longitude: 72.8777, name: 'Mumbai',    city: 'Mumbai',    formatted_address: 'Mumbai, Maharashtra, India', pincode: '400001' },
-  delhi:     { latitude: 28.6139, longitude: 77.2090, name: 'New Delhi', city: 'New Delhi', formatted_address: 'New Delhi, Delhi, India',    pincode: '110001' },
-  bengaluru: { latitude: 12.9716, longitude: 77.5946, name: 'Bengaluru', city: 'Bengaluru', formatted_address: 'Bengaluru, Karnataka, India', pincode: '560001' }
-};
+// ---------- City lookup (any Indian city) ----------
+// Free-text city -> coordinates via OpenStreetMap Nominatim (India only).
+// QuickCompare picks the delivery location from localStorage.geolocation, so we just need lat/lng.
+const KNOWN_CITIES = ['Agra','Ahmedabad','Ajmer','Aligarh','Allahabad','Amritsar','Aurangabad','Bareilly','Belgaum','Bengaluru','Bhopal','Bhubaneswar','Bikaner','Chandigarh','Chennai','Coimbatore','Cuttack','Dehradun','Delhi','Dhanbad','Durgapur','Faridabad','Ghaziabad','Goa','Gorakhpur','Greater Noida','Gurugram','Guwahati','Gwalior','Hubli','Hyderabad','Indore','Jabalpur','Jaipur','Jalandhar','Jammu','Jamshedpur','Jodhpur','Kanpur','Kochi','Kolhapur','Kolkata','Kota','Kozhikode','Lucknow','Ludhiana','Madurai','Mangaluru','Meerut','Mohali','Moradabad','Mumbai','Mysuru','Nagpur','Nashik','Navi Mumbai','New Delhi','Noida','Panchkula','Patna','Pune','Raipur','Rajkot','Ranchi','Surat','Thane','Thiruvananthapuram','Tiruchirappalli','Udaipur','Vadodara','Varanasi','Vijayawada','Visakhapatnam','Zirakpur'];
+const ALIASES = { gurgaon: 'Gurugram', bangalore: 'Bengaluru', bombay: 'Mumbai', calcutta: 'Kolkata', madras: 'Chennai', mysore: 'Mysuru', mangalore: 'Mangaluru', trivandrum: 'Thiruvananthapuram', cochin: 'Kochi', vizag: 'Visakhapatnam', prayagraj: 'Allahabad', baroda: 'Vadodara', poona: 'Pune' };
+const OK_TYPES = new Set(['city', 'town', 'municipality', 'city_district', 'borough', 'suburb', 'county', 'state_district', 'village', 'neighbourhood', 'quarter']);
+const geoCache = new Map();
+let lastGeoCall = 0;
+
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+
+function suggestCities(q) {
+  const s = q.toLowerCase();
+  return KNOWN_CITIES
+    .map(c => ({ c, d: Math.min(editDistance(s, c.toLowerCase()), c.toLowerCase().startsWith(s) && s.length >= 3 ? 0 : 99) }))
+    .filter(x => x.d <= Math.max(2, Math.floor(s.length / 3)))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 3)
+    .map(x => x.c);
+}
+
+async function resolveCity(input) {
+  const raw = (input || '').toString().trim().replace(/\s+/g, ' ');
+  if (raw.length < 2 || !/^[\p{L} .,'-]+$/u.test(raw)) return { error: 'Please type a valid city name (letters only).', suggestions: [] };
+  const q = ALIASES[raw.toLowerCase()] || raw;
+  const key = q.toLowerCase();
+  if (geoCache.has(key)) return geoCache.get(key);
+
+  const wait = 1100 - (Date.now() - lastGeoCall); // Nominatim: max 1 request/second
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastGeoCall = Date.now();
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=in&format=jsonv2&addressdetails=1&limit=5&featureType=settlement`;
+  const r = await fetch(url, { headers: { 'User-Agent': 'SattvikoPricingDashboard/1.1 (evolvmarketing)', 'Accept-Language': 'en' } });
+  if (!r.ok) throw new Error(`City lookup service error (${r.status}). Try again in a moment.`);
+  const results = (await r.json()).filter(x => OK_TYPES.has(x.addresstype));
+
+  let out;
+  if (!results.length) {
+    const suggestions = suggestCities(raw);
+    out = { error: `City "${raw}" not found. Please check the spelling${suggestions.length ? '' : ' and type the full city name'}.`, suggestions };
+  } else {
+    const best = results.sort((a, b) => b.importance - a.importance)[0];
+    const a = best.address || {};
+    const name = best.name;
+    const state = a.state || '';
+    out = {
+      city: {
+        name,
+        state,
+        label: state && state.toLowerCase() !== name.toLowerCase() ? `${name}, ${state}` : name,
+        corrected: name.toLowerCase() !== raw.toLowerCase(),
+        geo: {
+          latitude: parseFloat(best.lat), longitude: parseFloat(best.lon),
+          name, city: a.city || a.town || name,
+          formatted_address: [name, state, 'India'].filter(Boolean).join(', '),
+          pincode: a.postcode || '', place_id: '', country_code: 'IN'
+        }
+      }
+    };
+  }
+  geoCache.set(key, out);
+  return out;
+}
 
 // QuickCompare logo alt text -> dashboard column name
 const PLATFORM_MAP = {
@@ -44,8 +107,7 @@ async function getBrowser() {
   return browser;
 }
 
-async function scrape(search, cityKey) {
-  const geo = { ...CITIES[cityKey], place_id: '', country_code: 'IN' };
+async function scrape(search, cityKey, geo) {
   const b = await getBrowser();
   const page = await b.newPage();
   try {
@@ -63,10 +125,15 @@ async function scrape(search, cityKey) {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // Results stream in platform by platform - wait until the card count stops changing
-    await page.waitForFunction(
-      () => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Compare'),
-      { timeout: 45000 }
-    );
+    try {
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Compare'),
+        { timeout: 45000 }
+      );
+    } catch (e) {
+      console.log(`⚠️ ${cityKey}: no product cards appeared`);
+      return { products: [], deliveringTo: null };
+    }
     let last = -1, stable = 0;
     for (let i = 0; i < 30 && stable < 4; i++) {
       const n = await page.evaluate(() => document.body.innerText.length);
@@ -147,28 +214,46 @@ async function scrape(search, cityKey) {
   }
 }
 
+app.get('/api/city', async (req, res) => {
+  try {
+    const r = await resolveCity(req.query.q);
+    if (r.error) return res.status(404).json({ success: false, message: r.error, suggestions: r.suggestions });
+    res.json({ success: true, city: { name: r.city.name, state: r.city.state, label: r.city.label, corrected: r.city.corrected } });
+  } catch (e) {
+    res.status(503).json({ success: false, message: e.message });
+  }
+});
+
 app.get('/api/products', async (req, res) => {
   const search = (req.query.search || 'sattviko').toString();
-  const cityKey = (req.query.city || 'gurgaon').toString().toLowerCase();
-  if (!CITIES[cityKey]) {
-    return res.status(400).json({ success: false, message: `Unknown city. Use one of: ${Object.keys(CITIES).join(', ')}` });
+  let resolved;
+  try {
+    resolved = await resolveCity(req.query.city || 'Gurugram');
+  } catch (e) {
+    return res.status(503).json({ success: false, message: e.message });
   }
+  if (resolved.error) {
+    return res.status(404).json({ success: false, code: 'CITY_NOT_FOUND', message: resolved.error, suggestions: resolved.suggestions });
+  }
+  const { city } = resolved;
+  const cityKey = city.label.toLowerCase();
   const key = `${search}|${cityKey}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS && req.query.refresh !== '1') {
     return res.json({ ...hit.body, cached: true });
   }
-  const job = queue.then(() => scrape(search, cityKey));
+  const job = queue.then(() => scrape(search, city.name, city.geo));
   queue = job.catch(() => {});
   try {
     const { products, deliveringTo } = await job;
     if (!products.length) {
-      return res.status(502).json({ success: false, message: 'QuickCompare returned no matching products (page may not have loaded). Try again.' });
+      return res.status(404).json({ success: false, code: 'NO_PRODUCTS', city: city.label, message: `No ${search} products found on quick commerce in ${city.label}. Quick commerce may not deliver here yet.` });
     }
     const body = {
       success: true,
       source: 'quickcompare.in',
-      city: cityKey,
+      city: city.label,
+      cityCorrected: city.corrected,
       deliveringTo,
       productCount: products.length,
       data: products,
@@ -177,7 +262,7 @@ app.get('/api/products', async (req, res) => {
     cache.set(key, { at: Date.now(), body });
     res.json(body);
   } catch (err) {
-    console.error(`❌ ${cityKey}: ${err.message}`);
+    console.error(`❌ ${city.label}: ${err.message}`);
     if (browser) { browser.close().catch(() => {}); browser = null; }
     res.status(500).json({ success: false, message: err.message });
   }
@@ -190,7 +275,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ message: 'Sattviko Pricing Backend', endpoints: ['GET /api/health', 'GET /api/products?search=sattviko&city=gurgaon|mumbai|delhi|bengaluru'] });
+  res.json({ message: 'Sattviko Pricing Backend', endpoints: ['GET /api/health', 'GET /api/city?q=pune', 'GET /api/products?search=sattviko&city=<any Indian city>'] });
 });
 
 app.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
