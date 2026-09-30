@@ -1,5 +1,6 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
+const chromium = require('@sparticuz/chromium');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -9,13 +10,24 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+const cityMapping = {
+  'gurgaon': 'Gurgaon',
+  'mumbai': 'Mumbai',
+  'delhi': 'Delhi',
+  'bengaluru': 'Bengaluru'
+};
+
 let browser = null;
 
 async function initBrowser() {
   if (!browser) {
+    const executablePath = await chromium.executablePath();
+
     browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: executablePath,
+      headless: chromium.headless,
     });
   }
   return browser;
@@ -26,106 +38,54 @@ async function fetchQuickCompareData(searchQuery) {
   try {
     const browserInstance = await initBrowser();
     page = await browserInstance.newPage();
-
+    
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-
+    
     const url = `https://quickcompare.in/search-results?q=${encodeURIComponent(searchQuery)}`;
-    console.log(`\n🔍 Fetching: ${url}`);
+    console.log(`🔍 Fetching: ${url}`);
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
-    await page.waitForTimeout(3000); // Wait for JS to render
-    console.log('✅ Page loaded and rendered');
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    console.log('✅ Page loaded');
 
-    // Debug: Get page structure
-    const debugInfo = await page.evaluate(() => {
-      return {
-        title: document.title,
-        bodyLength: document.body.innerText.length,
-        allDivs: document.querySelectorAll('div').length,
-        allSpans: document.querySelectorAll('span').length,
-        allButtons: document.querySelectorAll('button').length,
-        allArticles: document.querySelectorAll('article').length,
-        hasRupee: document.body.innerText.includes('₹'),
-        hasBlinkit: document.body.innerText.includes('Blinkit'),
-        hasZepto: document.body.innerText.includes('Zepto'),
-        hasSattviko: document.body.innerText.includes('Sattviko'),
-        firstDivClass: document.querySelector('div')?.className || 'none'
-      };
-    });
-
-    console.log('📊 Page Debug Info:', JSON.stringify(debugInfo, null, 2));
-
-    // Now extract products with detailed logging
     const products = await page.evaluate(() => {
-      const results = [];
+      const items = [];
+      
+      // Find all potential product elements
+      const elements = document.querySelectorAll(
+        '[data-testid*="product"], [class*="Product"], article, [role="article"], .item'
+      );
 
-      // Log all text nodes to find product names
-      const bodyText = document.body.innerText;
-      const lines = bodyText.split('\n').filter(l => l.trim().length > 0);
+      elements.forEach(el => {
+        try {
+          const name = el.querySelector('h2, h3, h4, [class*="name"]')?.textContent?.trim();
+          if (!name || name.length < 2) return;
 
-      console.log(`Found ${lines.length} text lines`);
+          const item = { name, platforms: {} };
 
-      // Look for Sattviko products
-      const sattuikoLines = lines.filter(l => l.toLowerCase().includes('sattviko'));
-      console.log(`Sattviko mentions: ${sattuikoLines.length}`);
+          // Get prices
+          const prices = el.querySelectorAll('button, [class*="price"], span');
+          prices.forEach(p => {
+            const text = p.textContent;
+            const match = text.match(/₹?\s*(\d+)/);
+            if (match) {
+              const price = parseFloat(match[1]);
+              if (price > 0) {
+                const platform = text.split('₹')[0].trim() || 'Platform';
+                item.platforms[platform] = { price, available: true };
+              }
+            }
+          });
 
-      // Try all possible selectors
-      const selectors = [
-        'div[class*="product"]',
-        '[class*="card"]',
-        '[data-testid*="product"]',
-        'article',
-        '[role="article"]',
-        'li',
-        'button',
-        '[class*="item"]'
-      ];
-
-      let elementsFound = 0;
-      selectors.forEach(selector => {
-        const elements = document.querySelectorAll(selector);
-        if (elements.length > 0) {
-          console.log(`Selector "${selector}": ${elements.length} elements`);
-          elementsFound += elements.length;
-        }
-      });
-
-      console.log(`Total elements found: ${elementsFound}`);
-
-      // Try to extract any text that looks like a product
-      const potentialProducts = [];
-      lines.forEach((line, i) => {
-        if (line.trim().length > 3 && !line.includes('http')) {
-          // Check if next lines have prices
-          const nextLines = lines.slice(i, i + 5).join(' ');
-          if (nextLines.includes('₹') || nextLines.includes('Blinkit')) {
-            potentialProducts.push({
-              name: line.trim(),
-              context: nextLines.substring(0, 100)
-            });
+          if (Object.keys(item.platforms).length > 0) {
+            items.push(item);
           }
-        }
+        } catch (e) {}
       });
 
-      return {
-        productsFound: potentialProducts.slice(0, 5),
-        totalPotential: potentialProducts.length,
-        pageHasPrices: bodyText.includes('₹'),
-        pagePlatforms: {
-          hasBlinkit: bodyText.includes('Blinkit'),
-          hasZepto: bodyText.includes('Zepto'),
-          hasInstamart: bodyText.includes('Instamart'),
-          hasBigBasket: bodyText.includes('BigBasket')
-        }
-      };
+      return items;
     });
 
-    console.log('📦 Products Debug:', JSON.stringify(products, null, 2));
-
-    // Screenshot for manual inspection
-    await page.screenshot({ path: '/tmp/quickcompare-screenshot.png' });
-    console.log('📸 Screenshot saved to /tmp/quickcompare-screenshot.png');
-
+    console.log(`✅ Found ${products.length} products`);
     return products;
 
   } catch (error) {
@@ -139,11 +99,12 @@ async function fetchQuickCompareData(searchQuery) {
 app.get('/api/products', async (req, res) => {
   try {
     const { search = 'sattviko' } = req.query;
-    const debugData = await fetchQuickCompareData(search);
-
+    const products = await fetchQuickCompareData(search);
+    
     res.json({
       success: true,
-      debug: debugData,
+      productCount: products.length,
+      data: products,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -152,11 +113,14 @@ app.get('/api/products', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', server: 'Sattviko Backend - DEBUG MODE' });
+  res.json({ status: 'OK', server: 'Sattviko Backend' });
 });
 
 app.get('/', (req, res) => {
-  res.json({ message: 'Sattviko Backend - DEBUG' });
+  res.json({
+    message: 'Sattviko Pricing Backend',
+    endpoints: ['GET /api/health', 'GET /api/products?search=sattviko']
+  });
 });
 
 process.on('SIGINT', async () => {
@@ -165,5 +129,5 @@ process.on('SIGINT', async () => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 DEBUG Backend on port ${PORT}`);
+  console.log(`🚀 Backend running on port ${PORT}`);
 });
