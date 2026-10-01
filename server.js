@@ -12,9 +12,126 @@ app.use(cors());
 // ---------- City lookup (any Indian city) ----------
 // Free-text city -> coordinates via OpenStreetMap Nominatim (India only).
 // QuickCompare picks the delivery location from localStorage.geolocation, so we just need lat/lng.
-const KNOWN_CITIES = ['Agra','Ahmedabad','Ajmer','Aligarh','Allahabad','Amritsar','Aurangabad','Bareilly','Belgaum','Bengaluru','Bhopal','Bhubaneswar','Bikaner','Chandigarh','Chennai','Coimbatore','Cuttack','Dehradun','Delhi','Dhanbad','Durgapur','Faridabad','Ghaziabad','Goa','Gorakhpur','Greater Noida','Gurugram','Guwahati','Gwalior','Hubli','Hyderabad','Indore','Jabalpur','Jaipur','Jalandhar','Jammu','Jamshedpur','Jodhpur','Kanpur','Kochi','Kolhapur','Kolkata','Kota','Kozhikode','Lucknow','Ludhiana','Madurai','Mangaluru','Meerut','Mohali','Moradabad','Mumbai','Mysuru','Nagpur','Nashik','Navi Mumbai','New Delhi','Noida','Panchkula','Patna','Pune','Raipur','Rajkot','Ranchi','Surat','Thane','Thiruvananthapuram','Tiruchirappalli','Udaipur','Vadodara','Varanasi','Vijayawada','Visakhapatnam','Zirakpur'];
-const ALIASES = { gurgaon: 'Gurugram', bangalore: 'Bengaluru', bombay: 'Mumbai', calcutta: 'Kolkata', madras: 'Chennai', mysore: 'Mysuru', mangalore: 'Mangaluru', trivandrum: 'Thiruvananthapuram', cochin: 'Kochi', vizag: 'Visakhapatnam', prayagraj: 'Allahabad', baroda: 'Vadodara', poona: 'Pune' };
-const OK_TYPES = new Set(['city', 'town', 'municipality', 'city_district', 'borough', 'suburb', 'county', 'state_district', 'village', 'neighbourhood', 'quarter']);
+// Built-in coordinates for common quick-commerce cities: no external lookup needed (fast, never rate-limited)
+const BUILTIN_CITIES = {
+  'Agartala': [23.8312, 91.2824, 'Tripura'],
+  'Agra': [27.1753, 78.0098, 'Uttar Pradesh'],
+  'Ahmedabad': [23.0215, 72.5801, 'Gujarat'],
+  'Ajmer': [26.4691, 74.639, 'Rajasthan'],
+  'Aligarh': [27.8815, 78.069, 'Uttar Pradesh'],
+  'Allahabad': [25.4381, 81.8338, 'Uttar Pradesh'],
+  'Amritsar': [31.6357, 74.8787, 'Punjab'],
+  'Anand': [22.5587, 72.9627, 'Gujarat'],
+  'Aurangabad': [19.8762, 75.3433, 'Maharashtra'],
+  'Bareilly': [28.3551, 79.4179, 'Uttar Pradesh'],
+  'Bathinda': [30.2068, 74.9464, 'Punjab'],
+  'Belgaum': [15.8573, 74.5069, 'Karnataka'],
+  'Bengaluru': [12.9768, 77.5901, 'Karnataka'],
+  'Bhavnagar': [21.7719, 72.1416, 'Gujarat'],
+  'Bhilai': [21.2121, 81.3733, 'Chhattisgarh'],
+  'Bhiwadi': [28.2039, 76.8374, 'Rajasthan'],
+  'Bhopal': [23.2585, 77.402, 'Madhya Pradesh'],
+  'Bhubaneswar': [20.2603, 85.8395, 'Odisha'],
+  'Bikaner': [28.0159, 73.3171, 'Rajasthan'],
+  'Bilaspur': [22.0797, 82.1409, 'Chhattisgarh'],
+  'Chandigarh': [30.7334, 76.7797, 'Chandigarh'],
+  'Chennai': [13.0837, 80.2702, 'Tamil Nadu'],
+  'Coimbatore': [11.0018, 76.9628, 'Tamil Nadu'],
+  'Cuttack': [20.4686, 85.8792, 'Odisha'],
+  'Davanagere': [14.4661, 75.9206, 'Karnataka'],
+  'Dehradun': [30.3256, 78.0437, 'Uttarakhand'],
+  'Delhi': [28.6328, 77.2198, 'Delhi'],
+  'Dhanbad': [23.7953, 86.431, 'Jharkhand'],
+  'Durgapur': [23.535, 87.338, 'West Bengal'],
+  'Erode': [11.3306, 77.7277, 'Tamil Nadu'],
+  'Faridabad': [28.4031, 77.3106, 'Haryana'],
+  'Gandhinagar': [23.2233, 72.6492, 'Gujarat'],
+  'Ghaziabad': [28.6712, 77.412, 'Uttar Pradesh'],
+  'Goa': [15.4909, 73.8278, 'Goa'],
+  'Gorakhpur': [26.76, 83.3668, 'Uttar Pradesh'],
+  'Greater Noida': [28.4671, 77.5138, 'Uttar Pradesh'],
+  'Guntur': [16.2915, 80.4542, 'Andhra Pradesh'],
+  'Gurugram': [28.4595, 77.0266, 'Haryana'],
+  'Guwahati': [26.1806, 91.7539, 'Assam'],
+  'Gwalior': [26.2037, 78.1574, 'Madhya Pradesh'],
+  'Haridwar': [29.9384, 78.1453, 'Uttarakhand'],
+  'Hisar': [29.1563, 75.7292, 'Haryana'],
+  'Hubli': [15.3518, 75.138, 'Karnataka'],
+  'Hyderabad': [17.3606, 78.4741, 'Telangana'],
+  'Imphal': [24.7991, 93.9364, 'Manipur'],
+  'Indore': [22.7204, 75.8682, 'Madhya Pradesh'],
+  'Jabalpur': [23.1702, 79.9325, 'Madhya Pradesh'],
+  'Jaipur': [26.9155, 75.819, 'Rajasthan'],
+  'Jalandhar': [31.3324, 75.5769, 'Punjab'],
+  'Jammu': [32.7186, 74.8581, 'Jammu and Kashmir'],
+  'Jamnagar': [22.4732, 70.0552, 'Gujarat'],
+  'Jamshedpur': [22.8015, 86.203, 'Jharkhand'],
+  'Jhansi': [25.4502, 78.58, 'Uttar Pradesh'],
+  'Jodhpur': [26.2968, 73.0351, 'Rajasthan'],
+  'Kanpur': [26.4609, 80.3218, 'Uttar Pradesh'],
+  'Karnal': [29.6667, 76.8333, 'Haryana'],
+  'Kochi': [9.9679, 76.2444, 'Kerala'],
+  'Kolhapur': [16.7028, 74.2405, 'Maharashtra'],
+  'Kolkata': [22.5726, 88.3639, 'West Bengal'],
+  'Kota': [25.1737, 75.8574, 'Rajasthan'],
+  'Kozhikode': [11.2451, 75.7755, 'Kerala'],
+  'Kurukshetra': [29.9694, 76.8483, 'Haryana'],
+  'Lucknow': [26.8381, 80.9346, 'Uttar Pradesh'],
+  'Ludhiana': [30.909, 75.8516, 'Punjab'],
+  'Madurai': [9.9261, 78.1141, 'Tamil Nadu'],
+  'Mangaluru': [12.8698, 74.843, 'Karnataka'],
+  'Mathura': [27.4956, 77.6856, 'Uttar Pradesh'],
+  'Meerut': [28.9963, 77.7062, 'Uttar Pradesh'],
+  'Mohali': [30.6909, 76.7115, 'Punjab'],
+  'Moradabad': [28.8335, 78.7733, 'Uttar Pradesh'],
+  'Mumbai': [19.055, 72.8692, 'Maharashtra'],
+  'Mysuru': [12.3052, 76.6554, 'Karnataka'],
+  'Nagpur': [21.1498, 79.0821, 'Maharashtra'],
+  'Nashik': [20.0112, 73.7902, 'Maharashtra'],
+  'Navi Mumbai': [19.0308, 73.0199, 'Maharashtra'],
+  'Navsari': [20.9524, 72.9324, 'Gujarat'],
+  'Nellore': [14.4494, 79.9874, 'Andhra Pradesh'],
+  'New Delhi': [28.6139, 77.209, 'Delhi'],
+  'Noida': [28.5706, 77.3272, 'Uttar Pradesh'],
+  'Panchkula': [30.6975, 76.8551, 'Haryana'],
+  'Patiala': [30.3302, 76.4008, 'Punjab'],
+  'Patna': [25.6093, 85.1235, 'Bihar'],
+  'Puducherry': [11.9341, 79.8306, 'Puducherry'],
+  'Pune': [18.5214, 73.8545, 'Maharashtra'],
+  'Raipur': [21.2381, 81.6337, 'Chhattisgarh'],
+  'Rajkot': [22.3053, 70.8028, 'Gujarat'],
+  'Ranchi': [23.3701, 85.325, 'Jharkhand'],
+  'Rishikesh': [30.1087, 78.2916, 'Uttarakhand'],
+  'Rohtak': [28.9011, 76.5802, 'Haryana'],
+  'Sagar': [23.8418, 78.7467, 'Madhya Pradesh'],
+  'Salem': [11.6552, 78.1582, 'Tamil Nadu'],
+  'Sangli': [16.8503, 74.5949, 'Maharashtra'],
+  'Shillong': [25.576, 91.8828, 'Meghalaya'],
+  'Shimla': [31.104, 77.1708, 'Himachal Pradesh'],
+  'Siliguri': [26.7164, 88.431, 'West Bengal'],
+  'Solapur': [17.67, 75.9008, 'Maharashtra'],
+  'Sonipat': [28.9954, 77.0234, 'Haryana'],
+  'Srinagar': [34.0747, 74.8204, 'Jammu and Kashmir'],
+  'Surat': [21.2095, 72.8317, 'Gujarat'],
+  'Thane': [19.1943, 72.9702, 'Maharashtra'],
+  'Thiruvananthapuram': [8.4882, 76.9476, 'Kerala'],
+  'Thrissur': [10.527, 76.2146, 'Kerala'],
+  'Tiruchirappalli': [10.8071, 78.6881, 'Tamil Nadu'],
+  'Tirupati': [13.6316, 79.4232, 'Andhra Pradesh'],
+  'Udaipur': [24.5787, 73.6863, 'Rajasthan'],
+  'Udupi': [13.3419, 74.7473, 'Karnataka'],
+  'Ujjain': [23.1885, 75.7717, 'Madhya Pradesh'],
+  'Vadodara': [22.2973, 73.1943, 'Gujarat'],
+  'Vapi': [20.3716, 72.9167, 'Gujarat'],
+  'Varanasi': [25.3356, 83.0076, 'Uttar Pradesh'],
+  'Vellore': [12.9072, 79.131, 'Tamil Nadu'],
+  'Vijayawada': [16.5115, 80.616, 'Andhra Pradesh'],
+  'Visakhapatnam': [17.6936, 83.2921, 'Andhra Pradesh'],
+  'Zirakpur': [30.6557, 76.8201, 'Punjab']
+};
+const KNOWN_CITIES = Object.keys(BUILTIN_CITIES);
+const ALIASES = { gurgaon: 'Gurugram', bangalore: 'Bengaluru', banglore: 'Bengaluru', bombay: 'Mumbai', calcutta: 'Kolkata', madras: 'Chennai', mysore: 'Mysuru', mangalore: 'Mangaluru', trivandrum: 'Thiruvananthapuram', cochin: 'Kochi', vizag: 'Visakhapatnam', prayagraj: 'Allahabad', baroda: 'Vadodara', poona: 'Pune', panaji: 'Goa', pondicherry: 'Puducherry', 'gr noida': 'Greater Noida', hubballi: 'Hubli', belagavi: 'Belgaum', trichy: 'Tiruchirappalli', calicut: 'Kozhikode' };
+const OK_TYPES = new Set(['city', 'town', 'municipality', 'city_district', 'borough', 'suburb', 'county', 'state_district', 'district', 'village', 'neighbourhood', 'quarter']);
 const geoCache = new Map();
 let lastGeoCall = 0;
 
@@ -37,44 +154,77 @@ function suggestCities(q) {
     .map(x => x.c);
 }
 
-async function resolveCity(input) {
-  const raw = (input || '').toString().trim().replace(/\s+/g, ' ');
-  if (raw.length < 2 || !/^[\p{L} .,'-]+$/u.test(raw)) return { error: 'Please type a valid city name (letters only).', suggestions: [] };
-  const q = ALIASES[raw.toLowerCase()] || raw;
-  const key = q.toLowerCase();
-  if (geoCache.has(key)) return geoCache.get(key);
+function makeCity(name, state, lat, lng, pincode, corrected) {
+  const label = state && state.toLowerCase() !== name.toLowerCase() ? `${name}, ${state}` : name;
+  return {
+    city: {
+      name, state, label, corrected,
+      geo: {
+        latitude: lat, longitude: lng, name, city: name,
+        formatted_address: [name, state, 'India'].filter(Boolean).join(', '),
+        pincode: pincode || '', place_id: '', country_code: 'IN'
+      }
+    }
+  };
+}
 
+// External lookups (only for cities not in the built-in list). Returns [{name, state, lat, lng, pincode}]
+async function nominatimSearch(q) {
   const wait = 1100 - (Date.now() - lastGeoCall); // Nominatim: max 1 request/second
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   lastGeoCall = Date.now();
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=in&format=jsonv2&addressdetails=1&limit=5&featureType=settlement`;
-  const r = await fetch(url, { headers: { 'User-Agent': 'SattvikoPricingDashboard/1.1 (evolvmarketing)', 'Accept-Language': 'en' } });
-  if (!r.ok) throw new Error(`City lookup service error (${r.status}). Try again in a moment.`);
-  const results = (await r.json()).filter(x => OK_TYPES.has(x.addresstype));
+  const r = await fetch(url, { headers: { 'User-Agent': 'SattvikoPricingDashboard/1.2 (evolvmarketing)', 'Accept-Language': 'en' }, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) throw new Error(`nominatim ${r.status}`);
+  return (await r.json())
+    .filter(x => OK_TYPES.has(x.addresstype))
+    .sort((a, b) => b.importance - a.importance)
+    .map(x => ({ name: x.name, state: (x.address || {}).state || '', lat: +x.lat, lng: +x.lon, pincode: (x.address || {}).postcode }));
+}
 
+async function photonSearch(q) {
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&osm_tag=place&bbox=68,6,98,37`;
+  const r = await fetch(url, { headers: { 'User-Agent': 'SattvikoPricingDashboard/1.2' }, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) throw new Error(`photon ${r.status}`);
+  return ((await r.json()).features || [])
+    .filter(f => f.properties.countrycode === 'IN' && OK_TYPES.has(f.properties.osm_value === 'state' ? 'x' : f.properties.osm_value))
+    .map(f => ({ name: f.properties.name, state: f.properties.state || '', lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], pincode: f.properties.postcode }));
+}
+
+const norm = t => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z ]/g, '').trim();
+
+async function resolveCity(input) {
+  const raw = (input || '').toString().trim().replace(/\s+/g, ' ');
+  if (raw.length < 2 || !/^[\p{L} .,'-]+$/u.test(raw)) return { error: 'Please type a valid city name (letters only).', suggestions: [] };
+  const key = norm(raw);
+  if (geoCache.has(key)) return geoCache.get(key);
+
+  // 1) Built-in list / aliases (also accepts "Pune, Maharashtra")
+  const first = norm(raw.split(',')[0]);
+  const aliasHit = ALIASES[first];
+  const builtinName = aliasHit || KNOWN_CITIES.find(c => norm(c) === first);
+  if (builtinName) {
+    const [lat, lng, state] = BUILTIN_CITIES[builtinName];
+    const out = makeCity(builtinName, state, lat, lng, '', norm(builtinName) !== first);
+    geoCache.set(key, out);
+    return out;
+  }
+
+  // 2) Any other Indian city via OpenStreetMap (Nominatim, falling back to Photon if rate-limited)
+  let results = null;
+  for (const search of [nominatimSearch, photonSearch]) {
+    try { results = await search(raw); break; } catch (e) { console.warn(`City lookup failed (${e.message}), trying fallback`); }
+  }
+  if (results === null) throw new Error('City lookup service is busy. Please try again in a minute.');
+
+  // Only accept an exact name match - a fuzzy match is offered as "Did you mean" instead
+  const exact = results.find(x => norm(x.name) === first);
   let out;
-  if (!results.length) {
-    const suggestions = suggestCities(raw);
-    out = { error: `City "${raw}" not found. Please check the spelling${suggestions.length ? '' : ' and type the full city name'}.`, suggestions };
+  if (exact) {
+    out = makeCity(exact.name, exact.state, exact.lat, exact.lng, exact.pincode, false);
   } else {
-    const best = results.sort((a, b) => b.importance - a.importance)[0];
-    const a = best.address || {};
-    const name = best.name;
-    const state = a.state || '';
-    out = {
-      city: {
-        name,
-        state,
-        label: state && state.toLowerCase() !== name.toLowerCase() ? `${name}, ${state}` : name,
-        corrected: name.toLowerCase() !== raw.toLowerCase(),
-        geo: {
-          latitude: parseFloat(best.lat), longitude: parseFloat(best.lon),
-          name, city: a.city || a.town || name,
-          formatted_address: [name, state, 'India'].filter(Boolean).join(', '),
-          pincode: a.postcode || '', place_id: '', country_code: 'IN'
-        }
-      }
-    };
+    const suggestions = [...new Set([...suggestCities(first), ...results.slice(0, 2).map(x => x.name)])].slice(0, 3);
+    out = { error: `City "${raw}" not found. Please check the spelling${suggestions.length ? '' : ' and type the full city name'}.`, suggestions };
   }
   geoCache.set(key, out);
   return out;
@@ -274,7 +424,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', chrome });
 });
 
+// Serve the dashboard itself at the root URL, so the backend link is the shareable dashboard link
+const DASHBOARD_FILE = require('path').join(__dirname, 'dashboard.html');
 app.get('/', (req, res) => {
+  if (require('fs').existsSync(DASHBOARD_FILE)) return res.sendFile(DASHBOARD_FILE);
   res.json({ message: 'Sattviko Pricing Backend', endpoints: ['GET /api/health', 'GET /api/city?q=pune', 'GET /api/products?search=sattviko&city=<any Indian city>'] });
 });
 
